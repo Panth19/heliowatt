@@ -65,6 +65,17 @@ npm run test:e2e    # 59 browser checks: shop, checkout, login, packing, shippin
 
 ## Deploy
 
+### Free: Render (no credit card)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Panth19/heliowatt)
+
+The button reads `render.yaml`, creates a free Node web service, and asks you for an `ADMIN_PASSWORD`.
+Render's free filesystem is ephemeral, so the SQLite database is reset whenever the service restarts or
+redeploys. That is fine for a demo, not for real orders. For durable data use the Docker volume below
+(or an always-free VM such as Oracle Cloud).
+
+### Docker
+
 ```
 docker build -t heliowatt .
 docker run -p 3000:3000 -e ADMIN_PASSWORD='a long password' -e COOKIE_SECURE=1 -e SEED=0 -v hw-data:/app/data heliowatt
