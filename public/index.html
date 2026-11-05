@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Heliowatt Shop and Ops</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..900&family=Public+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#shop" aria-label="Heliowatt shop">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="13" r="8" fill="var(--sun)"/><path d="M3 21h26" stroke="var(--water)" stroke-width="3" stroke-linecap="round"/><path d="M7 27h18" stroke="var(--water)" stroke-width="3" stroke-linecap="round" opacity=".55"/></svg>
+      Heliowatt
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="#shop" data-nav="shop">Shop</a>
+      <a href="#track" data-nav="track">Track order</a>
+      <span class="grp">Back office</span>
+      <a href="#orders" data-nav="orders">Orders</a>
+      <a href="#packing" data-nav="packing">Packing <span class="count" id="n-pack" hidden></span></a>
+      <a href="#returns" data-nav="returns">Returns <span class="count" id="n-ret" hidden></span></a>
+      <a href="#outbox" data-nav="outbox">Emails</a>
+      <button class="link" id="logout" type="button" data-act="logout" hidden>Log out</button>
+    </nav>
+    <button class="btn ghost cartbtn" id="cart-open" type="button" data-act="cart-open">Cart <span class="count" id="n-cart">0</span></button>
+  </div>
+</header>
+<main class="wrap" id="app"></main>
+<footer>
+  <div class="wrap">
+    <span>Demo shop with a fictional brand. No payment is taken; emails go to the Emails page instead of being sent.</span>
+  </div>
+</footer>
+<dialog id="cart" aria-labelledby="cart-h"></dialog>
+<dialog id="rma-dlg" aria-labelledby="rma-h"></dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="/rules.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

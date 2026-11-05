@@ -1,0 +1,200 @@
+// Browser end-to-end test against the real server and a throw-away database.
+// Run: npm run test:e2e   (needs `npm i -D playwright` and a Chromium build)
+const { chromium } = require('playwright');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { createApp } = require('../server');
+
+const PASSWORD = 'e2e-password-1';
+const shots = process.env.SHOTS || '';
+let passed = 0, failed = 0;
+const ok = (cond, name) => { if (cond) { passed++; console.log('  ok   ' + name); } else { failed++; console.log('  FAIL ' + name); } };
+
+(async () => {
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'hw-e2e-'));
+  const app = createApp({ dbFile: path.join(dir, 'e2e.db'), adminPassword: PASSWORD, seed: true });
+  await new Promise(r => app.server.listen(0, r));
+  const base = 'http://127.0.0.1:' + app.server.address().port;
+  const browser = await chromium.launch();
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(String(e)));
+  page.on('console', m => { if (m.type() === 'error' && !/fonts\.g|ERR_|Failed to load resource/.test(m.text())) errors.push(m.text()); });
+  const text = sel => page.textContent(sel);
+  const num = async sel => parseInt((await text(sel)) || '0', 10);
+  const stock = async sku => (await (await page.request.get(base + '/api/products')).json()).find(p => p.sku === sku).stock;
+
+  console.log('Shop');
+  await page.goto(base + '/');
+  await page.waitForSelector('#chart svg');
+  ok(await page.isVisible('h1'), 'hero renders from the server-delivered page');
+  ok(/litres of water at 60/.test(await text('#day')), 'solar model computes a day');
+  ok((await page.locator('.part').count()) === 3, 'three add-on parts come from the catalogue API');
+  ok(/Only 4 left/.test(await text('.part:has-text("Clamp-on current sensor")')), 'low stock is shown');
+  await page.check('input[value="DIV3-DIN"]');
+  const ts2Before = await stock('TS2');
+  await page.click('#p-add');
+  await page.click('.part:has-text("Tank temperature sensor") button');
+  ok(await num('#n-cart') === 2, 'cart badge counts 2 items');
+  await page.reload();
+  await page.waitForSelector('#chart svg');
+  ok(await num('#n-cart') === 2, 'cart survives a reload');
+
+  console.log('Checkout');
+  await page.click('#cart-open');
+  await page.click('[data-act=checkout]');
+  await page.click('#place');
+  ok((await text('#e-name')).length > 0 && (await text('#e-terms')).length > 0, 'empty form shows field errors');
+  await page.fill('#f-name', 'Erika Mustermann'); await page.fill('#f-email', 'erika@example.com');
+  await page.fill('#f-street', 'Karl-Marx-Straße 12'); await page.fill('#f-city', 'Cottbus'); await page.fill('#f-zip', '0310');
+  await page.check('#f-terms');
+  await page.click('#place');
+  ok(/5 digits/.test(await text('#e-zip')), 'postcode rule is shared with the server');
+  await page.fill('#f-zip', '03046');
+  await page.click('#place');
+  await page.waitForSelector('text=Order placed');
+  const newId = (await text('#cart .dlg p b'));
+  ok(/^HW-1044$/.test(newId), 'server assigns the next order number: ' + newId);
+  ok(await stock('TS2') === ts2Before - 1, 'stock was reserved in the database');
+  ok(await num('#n-cart') === 0, 'cart is emptied after ordering');
+
+  console.log('Customer tracking');
+  await page.click('[data-act=track-order]');
+  await page.waitForSelector('.steps');
+  ok(/HW-1044/.test(await text('.trackbox')) && /Being packed/.test(await text('.trackbox')), 'tracking page opens with the new order');
+  await page.fill('#t-email', 'wrong@example.com');
+  await page.click('#track-form button[type=submit]');
+  await page.waitForFunction(() => /could not find/.test(document.querySelector('#track-err').textContent));
+  ok(true, 'wrong email does not reveal the order');
+
+  console.log('Back office login');
+  await page.goto(base + '/#orders');
+  await page.waitForSelector('#login-form');
+  ok(true, 'back office shows a login instead of data');
+  await page.fill('#pw', 'wrong-password');
+  await page.click('#login-form button');
+  await page.waitForFunction(() => /Wrong password/.test(document.querySelector('#login-err').textContent));
+  ok(true, 'wrong password is rejected');
+  const anonData = await page.request.get(base + '/api/admin/data');
+  ok(anonData.status() === 401, 'admin API refuses requests without a session');
+  await page.fill('#pw', PASSWORD);
+  await page.click('#login-form button');
+  await page.waitForSelector('tr[data-row]');
+  ok(await page.locator('tr[data-row="HW-1044"]').count() === 1, 'new order shows up in the order list');
+  ok(await num('#n-pack') === 4, 'packing badge shows 4 orders waiting');
+
+  console.log('Packing and shipping');
+  await page.click('[data-nav=packing]');
+  const card = page.locator('#pk-HW-1044');
+  await card.waitFor();
+  const ship = card.locator('[data-act=ship]');
+  ok(await ship.isDisabled(), 'ship button starts disabled');
+  for (const cb of await card.locator('input[type=checkbox]').all()) await cb.check();
+  await page.waitForTimeout(150);
+  await card.locator('[data-track]').fill('abc');
+  ok(await ship.isDisabled(), 'short tracking number keeps it disabled');
+  await card.locator('[data-track]').fill('JJD149909998877');
+  ok(await ship.isEnabled(), 'ship button enables with checklist and tracking');
+  await page.reload();
+  await page.waitForSelector('#pk-HW-1044');
+  ok(await page.locator('#pk-HW-1044 input[type=checkbox]:checked').count() === 5, 'ticked steps are saved on the server');
+  await page.locator('#pk-HW-1044 [data-track]').fill('JJD149909998877');
+  if (shots) await page.screenshot({ path: shots + '/packing-desktop.png', fullPage: true });
+  await page.locator('#pk-HW-1044 [data-act=ship]').click();
+  await page.waitForFunction(() => !document.querySelector('#pk-HW-1044'));
+  ok(await num('#n-pack') === 3, 'packing queue shrinks to 3');
+
+  console.log('Emails and exports');
+  await page.click('[data-nav=outbox]');
+  await page.waitForSelector('.mail');
+  const mails = await text('.panel');
+  ok(/Order HW-1044 received/.test(mails) && /HW-1044 has shipped/.test(mails), 'confirmation and shipping emails are in the outbox');
+  const csv = await page.request.get(base + '/api/admin/orders.csv');
+  ok(csv.status() === 200 && /HW-1044/.test(await csv.text()), 'CSV export works with the session');
+  const slip = await page.request.get(base + '/admin/orders/HW-1044/slip');
+  ok(slip.status() === 200 && /Packing slip HW-1044/.test(await slip.text()), 'packing slip renders');
+
+  console.log('Delivery and customer return');
+  await page.click('[data-nav=orders]');
+  await page.click('[data-act=sel-order][data-id="HW-1044"]');
+  await page.click('[data-act=deliver]');
+  await page.waitForFunction(() => /Delivered/.test(document.querySelector('#odetail').textContent));
+  ok(/14 of 14 days left/.test(await text('#odetail')), 'withdrawal window starts at delivery');
+  const cust = await ctx.newPage();
+  await cust.goto(base + '/#track');
+  await cust.fill('#t-id', 'hw-1044'); await cust.fill('#t-email', 'ERIKA@example.com');
+  await cust.click('#track-form button[type=submit]');
+  await cust.waitForSelector('.steps');
+  ok(/JJD149909998877/.test(await cust.textContent('.trackbox')), 'customer sees the tracking number (id and email are case-insensitive)');
+  ok(await cust.locator('.steps li.done').count() === 3, 'all three progress steps are done');
+  await cust.fill('#tr-TS2', '1');
+  await cust.selectOption('#tr-reason', 'Does not fit my setup');
+  await cust.click('#track-return button[type=submit]');
+  await cust.waitForSelector('text=Your returns');
+  ok(/RMA-202/.test(await cust.textContent('.trackbox')), 'customer return is registered as RMA-202');
+  await cust.close();
+  await page.click('[data-nav=returns]');
+  await page.waitForSelector('.card:has-text("RMA-202")');
+  ok(/Requested by customer/.test(await text('.card:has-text("RMA-202")')), 'staff sees that the customer requested it');
+  ok(await num('#n-ret') === 3, 'returns badge shows 3 open returns');
+  await page.click('.card:has-text("RMA-202") [data-act=rma-received]');
+  await page.waitForSelector('.card:has-text("RMA-202") [data-act=rma-refund]');
+  const before = await stock('TS2');
+  await page.fill('.card:has-text("RMA-202") input[type=number]', '99');
+  await page.click('.card:has-text("RMA-202") [data-act=rma-refund]');
+  await page.waitForFunction(() => /between/.test(document.querySelector('#ref-err-RMA-202').textContent));
+  ok(true, 'server rejects a refund above the item value');
+  await page.fill('.card:has-text("RMA-202") input[type=number]', '18.50');
+  await page.click('.card:has-text("RMA-202") [data-act=rma-refund]');
+  await page.waitForFunction(() => /Refunded 18,50/.test(document.querySelector('#app').textContent));
+  ok(await stock('TS2') === before + 1, 'resellable return is back in stock');
+
+  console.log('Orders, stock and cancel');
+  await page.click('[data-nav=orders]');
+  await page.click('[data-act=filter][data-f=new]');
+  await page.click('[data-act=sel-order][data-id="HW-1043"]');
+  const s1 = await stock('DIV3-DIN');
+  await page.click('[data-act=cancel]');
+  ok(/Confirm cancel/.test(await text('#odetail')), 'cancel asks for confirmation');
+  await page.click('[data-act=cancel]');
+  await page.waitForFunction(() => !document.querySelector('tr[data-row="HW-1043"]'));
+  ok(await stock('DIV3-DIN') === s1 + 1, 'cancelling releases stock');
+  await page.fill('#rcv-CT1', '6');
+  await page.click('[data-act=restock][data-sku=CT1]');
+  await page.waitForFunction(() => /Received 6/.test(document.querySelector('#toast').textContent));
+  ok(await stock('CT1') === 10, 'receiving stock updates the shop');
+  await page.click('[data-act=filter][data-f=all]');
+  await page.fill('#q', 'mira');
+  ok(await page.locator('tr[data-row]').count() === 1, 'search narrows the list');
+
+  console.log('Session');
+  await page.click('#logout');
+  await page.waitForFunction(() => /Logged out/.test(document.querySelector('#toast').textContent));
+  await page.goto(base + '/#packing');
+  await page.waitForSelector('#login-form');
+  ok(true, 'logging out locks the back office again');
+  ok((await page.request.get(base + '/api/admin/data')).status() === 401, 'session cookie is gone');
+
+  console.log('Layout');
+  for (const [w, h, name, scheme] of [[390, 844, 'mobile', 'light'], [390, 844, 'mobile-dark', 'dark'], [1280, 900, 'desktop-dark', 'dark']]) {
+    const c2 = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: scheme });
+    const p2 = await c2.newPage();
+    p2.on('pageerror', e => errors.push(String(e)));
+    await p2.goto(base + '/#shop');
+    await p2.request.post(base + '/api/admin/login', { data: { password: PASSWORD } });
+    for (const r of ['shop', 'track', 'orders', 'packing', 'returns', 'outbox']) {
+      await p2.goto(base + '/#' + r); await p2.reload();
+      await p2.waitForTimeout(350);
+      const over = await p2.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      ok(over <= 0, name + ' ' + r + ': no horizontal page scroll');
+      if (shots) await p2.screenshot({ path: shots + '/' + r + '-' + name + '.png', fullPage: true });
+    }
+    await c2.close();
+  }
+  ok(errors.length === 0, 'no console or page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
+  await browser.close();
+  await new Promise(r => app.server.close(r));
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('\n' + passed + ' passed, ' + failed + ' failed');
+  process.exit(failed ? 1 : 0);
+})().catch(e => { console.error(e); process.exit(1); });

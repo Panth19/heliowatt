@@ -1,0 +1,20 @@
+{
+  "name": "heliowatt",
+  "version": "1.0.0",
+  "description": "Shop and back office for a fictional solar hot-water product. Node 22.13+, no runtime dependencies.",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --no-warnings server.js",
+    "dev": "node --no-warnings --watch server.js",
+    "test": "node --no-warnings --test tests/api.test.js",
+    "test:e2e": "node --no-warnings tests/e2e.js",
+    "reset": "node -e \"require('fs').rmSync('data',{recursive:true,force:true});console.log('Database removed. It is recreated with demo data on the next start.')\""
+  },
+  "devDependencies": {
+    "playwright": "^1.64.1"
+  }
+}
